@@ -1,20 +1,3 @@
-// server/server_all.js — Servidor único: estáticos + WebSocket relay
-//
-// Sirve los archivos de la web (index.html, js/, css/) Y el relay WebSocket
-// en el mismo puerto. Una sola URL para todo.
-//
-// Uso:
-//   node server/server_all.js [puerto]
-//   (por defecto puerto 8080)
-//
-// Deploy:
-//   - Local:   node server/server_all.js  →  http://localhost:8080
-//   - Render:  startCommand: node server/server_all.js
-//
-// Una vez arrancado:
-//   - Abre http://TU_IP:8080  (sin ?server=... porque el relay está en el mismo host)
-//   - La página detecta automáticamente que el relay es wss://mismo-host/ws
-
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -29,7 +12,7 @@ try {
 }
 
 const PORT = parseInt(process.argv[2] || process.env.PORT || "8080", 10);
-const ROOT = path.join(__dirname, ".."); // carpeta online/
+const ROOT = path.join(__dirname, "..");
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -46,20 +29,15 @@ const MIME = {
 };
 
 const httpServer = http.createServer((req, res) => {
-  // CORS headers
   res.setHeader("Access-Control-Allow-Origin", "*");
-
   let urlPath = req.url.split("?")[0];
   if (urlPath === "/") urlPath = "/index.html";
-
-  // Seguridad: prevenir path traversal
   const filePath = path.join(ROOT, path.normalize(urlPath));
   if (!filePath.startsWith(ROOT)) {
     res.writeHead(403);
     res.end("Forbidden");
     return;
   }
-
   fs.readFile(filePath, (err, data) => {
     if (err) {
       res.writeHead(404, { "Content-Type": "text/plain" });
@@ -73,9 +51,8 @@ const httpServer = http.createServer((req, res) => {
   });
 });
 
-// WebSocket relay sobre el mismo servidor HTTP, en path /ws
 const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
-const rooms = new Map(); // roomCode -> Set<WebSocket>
+const rooms = new Map();
 
 wss.on("connection", (ws, req) => {
   let currentRoom = null;
@@ -90,7 +67,7 @@ wss.on("connection", (ws, req) => {
       playerId = msg.playerId || playerId;
       if (!rooms.has(currentRoom)) rooms.set(currentRoom, new Set());
       rooms.get(currentRoom).add(ws);
-      console.log(`[JOIN] ${playerId} → room ${currentRoom} (${rooms.get(currentRoom).size} clientes)`);
+      console.log("[JOIN] " + playerId + " → room " + currentRoom + " (" + rooms.get(currentRoom).size + " clientes)");
       broadcast(currentRoom, msg, ws);
       return;
     }
@@ -108,7 +85,7 @@ wss.on("connection", (ws, req) => {
       }
       if (rooms.get(currentRoom).size === 0) {
         rooms.delete(currentRoom);
-        console.log(`[CLOSE] room ${currentRoom} eliminada (vacía)`);
+        console.log("[CLOSE] room " + currentRoom + " eliminada");
       }
     }
   });
@@ -130,9 +107,7 @@ function broadcast(roomCode, msg, except) {
 }
 
 httpServer.listen(PORT, "0.0.0.0", () => {
-  console.log(`🩸 After Dark — Servidor único escuchando en http://0.0.0.0:${PORT}`);
-  console.log(`   WebSocket relay en ws://0.0.0.0:${PORT}/ws`);
-  console.log(`   Web estática en http://0.0.0.0:${PORT}/`);
-  console.log(`   - Para local: abre http://localhost:${PORT}?server=ws://localhost:${PORT}/ws`);
-  console.log(`   - Para Render: el servidor detecta la URL automáticamente`);
+  console.log("After Dark — Servidor único escuchando en http://0.0.0.0:" + PORT);
+  console.log("  WebSocket relay en ws://0.0.0.0:" + PORT + "/ws");
+  console.log("  Web estática en http://0.0.0.0:" + PORT + "/");
 });
