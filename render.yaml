@@ -1,20 +1,23 @@
-# render.yaml — Deploy gratuito opcional del relay en Render.com
+# render.yaml — Deploy del servidor único en Render.com
+#
+# El servidor server_all.js sirve los estáticos Y el relay WebSocket juntos.
+# Una sola URL para todo: no necesitas GitHub Pages separado.
 #
 # Uso:
 #   1. Crea cuenta en https://render.com (gratis)
-#   2. New → Web Service → conecta tu repo o sube esta carpeta
+#   2. New → Web Service → conecta tu repo
 #   3. Render detectará este archivo automáticamente
 #
-# O vía botón "Deploy to Render" si lo enlazas desde tu repo.
-# El servicio queda como wss://tu-relay.onrender.com (gratis, 750h/mes)
+# El servicio queda como https://tu-app.onrender.com
+# Abre esa URL directamente: la web y el relay están en el mismo host.
 
 services:
   - type: web
-    name: after-dark-relay
+    name: after-dark
     env: node
     plan: free
-    buildCommand: npm install ws
-    startCommand: node server/relay.js
+    buildCommand: npm install
+    startCommand: node server/server_all.js
     healthCheckPath: /
     autoDeploy: true
     envVars:

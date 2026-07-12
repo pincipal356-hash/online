@@ -1,0 +1,16 @@
+{
+  "name": "after-dark-online",
+  "version": "1.0.0",
+  "description": "After Dark Online — servidor único (estáticos + WebSocket relay)",
+  "main": "server/server_all.js",
+  "scripts": {
+    "start": "node server/server_all.js",
+    "relay": "node server/relay.js"
+  },
+  "dependencies": {
+    "ws": "^8.21.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

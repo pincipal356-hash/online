@@ -8,8 +8,34 @@ const App = (function() {
     transport: null,
     container: null,
     wsUrl: null,
-    transportMode: "broadcast"  // broadcast | ws | mqtt
+    transportMode: "broadcast",  // broadcast | ws | mqtt
+    connectionLog: [],
+    lastError: null
   };
+
+  function logConnection(msg, type = "info") {
+    const entry = { msg, type, ts: new Date().toLocaleTimeString() };
+    app.connectionLog.push(entry);
+    if (app.connectionLog.length > 20) app.connectionLog.shift();
+    console.log(`[App:${type}]`, msg);
+    // Si estamos en pantalla de diagnóstico, actualizar
+    const logEl = document.getElementById("diag-log");
+    if (logEl) {
+      logEl.innerHTML = app.connectionLog.map(e =>
+        `<div class="log-entry log-${e.type}">[${e.ts}] ${e.msg}</div>`
+      ).join("");
+    }
+  }
+
+  // Captura global de errores
+  window.addEventListener("error", (e) => {
+    app.lastError = e.error ? e.error.message : e.message;
+    logConnection("Error JS: " + app.lastError, "error");
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    app.lastError = e.reason ? (e.reason.message || e.reason) : "Promise rechazada";
+    logConnection("Promise rechazada: " + app.lastError, "error");
+  });
 
   function init() {
     app.container = document.getElementById("app");
@@ -17,14 +43,28 @@ const App = (function() {
     // Detectar modo de transporte desde URL
     // ?server=ws://host:port   → WebSocket relay propio
     // ?online=1                 → MQTT broker público (cross-network)
+    // ?auto=1                   → Detectar relay en mismo host (para server_all.js)
+    // (default sin parámetros)  → Si la URL es http(s)://host, intentar wss://host/ws automáticamente
     const params = new URLSearchParams(location.search);
     const server = params.get("server");
     const online = params.get("online");
+    const auto = params.get("auto");
     if (server) {
       app.transportMode = "ws";
       app.wsUrl = server;
+      logConnection(`Modo WebSocket relay: ${server}`, "info");
     } else if (online === "1" || online === "true") {
       app.transportMode = "mqtt";
+      logConnection("Modo MQTT broker público", "info");
+    } else if (auto === "1" || (!server && !online && location.protocol.startsWith("http") && location.hostname && location.hostname !== "localhost" && location.hostname !== "127.0.0.1" && location.hostname !== "pincipal356-hash.github.io")) {
+      // Auto-detectar: usar el mismo host con path /ws
+      // Construir wss:// o ws:// según el protocolo
+      const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
+      app.transportMode = "ws";
+      app.wsUrl = `${wsProtocol}//${location.host}/ws`;
+      logConnection(`Auto-detectado relay en mismo host: ${app.wsUrl}`, "info");
+    } else {
+      logConnection("Modo BroadcastChannel (local)", "info");
     }
 
     // Cargar client meta desde localStorage
@@ -103,6 +143,11 @@ const App = (function() {
       class: "btn btn-ghost btn-lg btn-block",
       onclick: () => showJoinScreen()
     }, "🔑 Unirse con código"));
+    actionsGrid.appendChild(UI.el("button", {
+      class: "btn btn-ghost btn-block",
+      style: "font-size: 13px; padding: 10px;",
+      onclick: () => showDiagScreen()
+    }, "🔧 Diagnóstico"));
     wrap.appendChild(actionsGrid);
 
     // Selector de modo de conexión
@@ -271,9 +316,11 @@ const App = (function() {
 
   function setupTransport(code) {
     if (app.transport) app.transport.close();
+    logConnection(`Configurando transporte: modo=${app.transportMode}, sala=${code}`, "info");
 
     if (app.transportMode === "mqtt") {
       // MQTT broker público
+      logConnection("Creando transporte MQTT...", "info");
       app.transport = TransportMQTT.create({
         roomCode: code,
         role: app.client.isHost ? "host" : "guest",
@@ -282,6 +329,7 @@ const App = (function() {
       });
     } else {
       // BroadcastChannel o WebSocket relay propio
+      logConnection(`Creando transporte ${app.transportMode}...` + (app.wsUrl ? ` URL=${app.wsUrl}` : ""), "info");
       app.transport = Transport.create({
         roomCode: code,
         mode: app.transportMode,
@@ -296,10 +344,15 @@ const App = (function() {
 
     if (app.transport.connect) {
       // MQTT o WebSocket necesitan connect explícito
+      logConnection("Conectando...", "info");
+      const connectStart = Date.now();
       app.transport.connect().then(() => {
+        const elapsed = Date.now() - connectStart;
+        logConnection(`Conectado en ${elapsed}ms`, "ok");
         UI.toast(app.transportMode === "mqtt" ? "Conectado al broker público" : "Conectado al relay", "ok");
         // Re-enviar join si era guest
         if (!app.client.isHost) {
+          logConnection("Enviando join como guest...", "info");
           app.transport.send({
             type: "join",
             room: code,
@@ -310,8 +363,31 @@ const App = (function() {
           });
         }
       }).catch(err => {
-        UI.toast("Error de conexión: " + (err.message || err), "error");
+        const msg = err.message || String(err);
+        logConnection(`Error de conexión: ${msg}`, "error");
+        UI.toast("Error de conexión: " + msg, "error");
+        // Reintentar después de 3s
+        setTimeout(() => {
+          logConnection("Reintentando conexión...", "warn");
+          setupTransport(code);
+        }, 3000);
       });
+    } else {
+      logConnection("Transporte BroadcastChannel listo (sin connect explícito)", "ok");
+      // BroadcastChannel no necesita connect, pero si somos guest enviamos join
+      if (!app.client.isHost) {
+        setTimeout(() => {
+          app.transport.send({
+            type: "join",
+            room: code,
+            playerId: app.client.playerId,
+            playerName: app.client.playerName,
+            gender: app.client.gender,
+            ts: Date.now()
+          });
+          logConnection("Join enviado (broadcast)", "info");
+        }, 200);
+      }
     }
   }
 
@@ -442,6 +518,135 @@ const App = (function() {
     }
   }
 
+  function showDiagScreen() {
+    const wrap = UI.el("div", { class: "fade-in home-screen" },
+      UI.el("h1", { class: "page-title" }, "Diagnóstico"),
+      UI.el("p", { class: "page-sub" }, "Estado de la conexión y errores.")
+    );
+
+    const card = UI.el("div", { class: "card" });
+    card.appendChild(UI.el("div", { class: "diag-row" },
+      UI.el("span", {}, "Modo de transporte:"),
+      UI.el("strong", {}, app.transportMode)
+    ));
+    card.appendChild(UI.el("div", { class: "diag-row" },
+      UI.el("span", {}, "URL del servidor:"),
+      UI.el("strong", {}, app.wsUrl || "(broadcast local)")
+    ));
+    card.appendChild(UI.el("div", { class: "diag-row" },
+      UI.el("span", {}, "Player ID:"),
+      UI.el("strong", {}, app.client.playerId)
+    ));
+    card.appendChild(UI.el("div", { class: "diag-row" },
+      UI.el("span", {}, "Nombre:"),
+      UI.el("strong", {}, app.client.playerName || "(sin nombre)")
+    ));
+    card.appendChild(UI.el("div", { class: "diag-row" },
+      UI.el("span", {}, "Es host:"),
+      UI.el("strong", {}, app.client.isHost ? "Sí" : "No")
+    ));
+    if (app.transport) {
+      card.appendChild(UI.el("div", { class: "diag-row" },
+        UI.el("span", {}, "Transporte activo:"),
+        UI.el("strong", {}, app.transport.type || "?")
+      ));
+      card.appendChild(UI.el("div", { class: "diag-row" },
+        UI.el("span", {}, "Conectado:"),
+        UI.el("strong", {}, app.transport.isConnected ? (app.transport.isConnected() ? "Sí" : "No") : "N/A")
+      ));
+    } else {
+      card.appendChild(UI.el("div", { class: "diag-row" },
+        UI.el("span", {}, "Transporte:"),
+        UI.el("strong", { style: "color: var(--text-mute);" }, "(no creado)")
+      ));
+    }
+    if (app.state) {
+      card.appendChild(UI.el("div", { class: "diag-row" },
+        UI.el("span", {}, "Sala:"),
+        UI.el("strong", {}, app.state.roomCode || "(ninguna)")
+      ));
+      card.appendChild(UI.el("div", { class: "diag-row" },
+        UI.el("span", {}, "Jugadores:"),
+        UI.el("strong", {}, String(app.state.players.length))
+      ));
+    }
+    if (app.lastError) {
+      card.appendChild(UI.el("div", { class: "diag-row" },
+        UI.el("span", {}, "Último error:"),
+        UI.el("strong", { style: "color: var(--danger);" }, app.lastError)
+      ));
+    }
+    wrap.appendChild(card);
+
+    // Log
+    wrap.appendChild(UI.el("div", { class: "section-title" }, "Log de conexión"));
+    const logBox = UI.el("div", { class: "diag-log", id: "diag-log" });
+    app.connectionLog.forEach(e => {
+      logBox.appendChild(UI.el("div", { class: `log-entry log-${e.type}` }, `[${e.ts}] ${e.msg}`));
+    });
+    wrap.appendChild(logBox);
+
+    // Acciones
+    wrap.appendChild(UI.el("div", { class: "section-title" }, "Acciones"));
+    wrap.appendChild(UI.el("div", { style: "display:flex; gap:10px; flex-wrap:wrap;" },
+      UI.el("button", {
+        class: "btn btn-primary",
+        onclick: () => {
+          // Test directo: intentar conectar al WebSocket relay
+          if (!app.wsUrl) { UI.toast("No hay URL de servidor configurada", "error"); return; }
+          logConnection("Test directo: conectando a " + app.wsUrl, "info");
+          try {
+            const testWs = new WebSocket(app.wsUrl);
+            const start = Date.now();
+            testWs.onopen = () => {
+              logConnection(`Test OK: conectado en ${Date.now() - start}ms`, "ok");
+              UI.toast("Conexión OK", "ok");
+              testWs.close();
+            };
+            testWs.onerror = (err) => {
+              logConnection("Test FAIL: error de WebSocket", "error");
+              UI.toast("Conexión fallida", "error");
+            };
+            testWs.onclose = (ev) => {
+              logConnection(`Test cerrado: code=${ev.code}, reason=${ev.reason || "(sin razón)"}`, "info");
+            };
+            setTimeout(() => {
+              if (testWs.readyState !== WebSocket.OPEN && testWs.readyState !== WebSocket.CLOSED) {
+                logConnection("Test: timeout tras 10s", "error");
+                testWs.close();
+              }
+            }, 10000);
+          } catch(err) {
+            logConnection("Test error: " + err.message, "error");
+          }
+        }
+      }, "🔌 Probar conexión"),
+      UI.el("button", {
+        class: "btn btn-ghost",
+        onclick: () => {
+          if (app.state && app.state.roomCode) {
+            setupTransport(app.state.roomCode);
+            UI.toast("Reconectando...", "warn");
+          } else {
+            UI.toast("No hay sala activa", "error");
+          }
+        }
+      }, "🔄 Reconectar"),
+      UI.el("button", {
+        class: "btn btn-ghost",
+        onclick: () => {
+          app.connectionLog = [];
+          app.lastError = null;
+          showDiagScreen();
+        }
+      }, "🧹 Limpiar log"),
+      UI.el("button", { class: "btn btn-ghost", onclick: () => showHomeScreen() }, "← Volver")
+    ));
+
+    app.container.innerHTML = "";
+    app.container.appendChild(wrap);
+  }
+
   function leave() {
     if (app.transport) {
       if (!app.client.isHost) {
@@ -464,6 +669,8 @@ const App = (function() {
   app.hostPickNext = hostPickNext;
   app.leave = leave;
   app.showHomeScreen = showHomeScreen;
+  app.showDiagScreen = showDiagScreen;
+  app.logConnection = logConnection;
 
   // Cleanup al cerrar
   window.addEventListener("beforeunload", () => {

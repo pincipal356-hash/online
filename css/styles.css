@@ -163,6 +163,37 @@ h1, h2, h3 { font-weight: 700; letter-spacing: -0.01em; }
 }
 .mo-info a { color: var(--blood); }
 
+/* ============ DIAGNÓSTICO ============ */
+.diag-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  gap: 12px;
+}
+.diag-row:last-child { border-bottom: none; }
+.diag-row span { color: var(--text-dim); }
+.diag-row strong { color: var(--text); word-break: break-all; text-align: right; }
+
+.diag-log {
+  background: rgba(0,0,0,0.5);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  max-height: 300px;
+  overflow-y: auto;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.log-entry { margin-bottom: 2px; word-break: break-all; }
+.log-info { color: var(--text-dim); }
+.log-ok { color: var(--ok); }
+.log-warn { color: var(--warn); }
+.log-error { color: var(--danger); }
+
 /* ============ HOME SCREEN ============ */
 .home-screen { max-width: 540px; margin: 0 auto; }
 .home-actions { display: flex; flex-direction: column; gap: 10px; }
