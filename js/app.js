@@ -394,11 +394,13 @@ const App = (function() {
   // ============ MESSAGE HANDLER ============
   function handleMessage(msg) {
     if (!msg || !msg.type) return;
+    logConnection(`Recibido: ${msg.type}` + (msg.action ? ` (${msg.action.type})` : "") + (msg.gameState ? ` [screen=${msg.gameState.screen}, mode=${msg.gameState.mode || "-"}]` : ""), "info");
 
     switch(msg.type) {
       case "join": {
         // Solo el host procesa joins
         if (app.client.isHost) {
+          logConnection(`Join de ${msg.playerName} (${msg.playerId})`, "info");
           app.state = State.applyAction(app.state, { type: "join", playerName: msg.playerName, gender: msg.gender }, msg.playerId);
           // Responder al cliente con state_sync (él se añadirá a sí mismo al recibir el estado)
           app.transport.send({ type: "state_sync", gameState: State.serialize(app.state), target: msg.playerId });
@@ -411,9 +413,16 @@ const App = (function() {
         // Si es para mí (target = mi playerId) o broadcast (sin target)
         if (!msg.target || msg.target === app.client.playerId) {
           if (msg.gameState) {
+            const oldScreen = app.currentScreen;
             app.state = msg.gameState;
-            if (app.state.screen !== app.currentScreen) goto(app.state.screen);
-            else rerender();
+            logConnection(`Estado aplicado: screen=${app.state.screen}, mode=${app.state.mode || "-"}, currentQ=${app.state.currentQ ? "sí" : "no"}, players=${app.state.players.length}`, "ok");
+            // Forzar sincronización de pantalla SIEMPRE
+            if (app.state.screen !== app.currentScreen) {
+              logConnection(`Cambio de pantalla: ${oldScreen} → ${app.state.screen}`, "info");
+              goto(app.state.screen);
+            } else {
+              rerender();
+            }
           }
         }
         break;
@@ -421,8 +430,14 @@ const App = (function() {
       case "action": {
         // Solo el host procesa acciones
         if (app.client.isHost && msg.action) {
+          logConnection(`Acción de ${msg.playerId}: ${msg.action.type}`, "info");
           app.state = State.applyAction(app.state, msg.action, msg.playerId);
+          // Si es start, asegurar screen=game
+          if (msg.action.type === "start") {
+            app.state.screen = "game";
+          }
           broadcastState();
+          rerender();
         }
         break;
       }
@@ -452,15 +467,22 @@ const App = (function() {
 
   // ============ CLIENT ACTIONS ============
   function sendAction(action) {
+    logConnection(`Enviando acción: ${action.type}`, "info");
     if (app.client.isHost) {
       // Host aplica localmente
       app.state = State.applyAction(app.state, action, app.client.playerId);
       // Caso especial: si es start, gestionar screen
       if (action.type === "start") {
         app.state.screen = "game";
+        logConnection("Partida iniciada, screen=game", "ok");
       }
       broadcastState();
-      rerender();
+      // Forzar sincronización de pantalla en el host también
+      if (app.state.screen && app.state.screen !== app.currentScreen) {
+        goto(app.state.screen);
+      } else {
+        rerender();
+      }
     } else {
       // Cliente envía al host
       app.transport.send({ type: "action", action, playerId: app.client.playerId });
@@ -488,8 +510,10 @@ const App = (function() {
   function hostPickNext() {
     if (!app.client.isHost || !app.state) return;
     if (app.state.currentQ) return; // ya hay pregunta
+    logConnection("Host eligiendo siguiente pregunta...", "info");
     const picked = Engine.pickNextQuestion(QUESTION_BANK, app.state);
     if (!picked) {
+      logConnection("No hay más preguntas disponibles", "error");
       UI.toast("Se acabaron las preguntas. Reinicia la partida.", "error");
       return;
     }
@@ -497,6 +521,7 @@ const App = (function() {
     app.state.currentActor = picked.actor;
     app.state.currentTarget = picked.target;
     app.state.lastParsedText = Engine.parseText(picked.q.text, picked.actor, picked.target);
+    logConnection(`Pregunta elegida: ${picked.q.id} (N${picked.q.level}), actor=${picked.actor?.name}, target=${picked.target?.name}`, "ok");
     broadcastState();
     rerender();
   }
@@ -508,6 +533,10 @@ const App = (function() {
 
   function rerender() {
     if (!app.state || !app.container) return;
+    // Sincronizar currentScreen con state.screen (para que host y cliente siempre coincidan)
+    if (app.state.screen && app.state.screen !== app.currentScreen) {
+      app.currentScreen = app.state.screen;
+    }
     const screen = app.currentScreen || app.state.screen || "lobby";
     switch(screen) {
       case "lobby": UI.renderLobby(app.container, app); break;
