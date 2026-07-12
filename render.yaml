@@ -1,0 +1,22 @@
+# render.yaml — Deploy gratuito opcional del relay en Render.com
+#
+# Uso:
+#   1. Crea cuenta en https://render.com (gratis)
+#   2. New → Web Service → conecta tu repo o sube esta carpeta
+#   3. Render detectará este archivo automáticamente
+#
+# O vía botón "Deploy to Render" si lo enlazas desde tu repo.
+# El servicio queda como wss://tu-relay.onrender.com (gratis, 750h/mes)
+
+services:
+  - type: web
+    name: after-dark-relay
+    env: node
+    plan: free
+    buildCommand: npm install ws
+    startCommand: node server/relay.js
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 20.0.0
